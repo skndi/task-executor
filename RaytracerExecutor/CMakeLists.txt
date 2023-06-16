@@ -5,21 +5,21 @@ if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/CMakeLists.txt)
     return()
 endif()
 
-set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CXX_STANDARD 20)
 
 set(SOURCES
-    ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Material.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Material.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Material.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Image.hpp
 
-    ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Primitive.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Primitive.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Primitive.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Accelerators.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Utils.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Threading.hpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Mesh.h
+    ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Mesh.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Mesh.cpp
 
     ${CMAKE_CURRENT_SOURCE_DIR}/urban-spork/src/Mesh.cpp

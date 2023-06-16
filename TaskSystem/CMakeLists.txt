@@ -1,6 +1,6 @@
 project(TaskSystem)
 
-set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CXX_STANDARD 20)
 
 set(SOURCES
     TaskSystem.cpp
@@ -8,9 +8,9 @@ set(SOURCES
 )
 
 set(HEADERS
-    Task.h
-    Executor.h
-    TaskSystem.h
+    Task.hpp
+    Executor.hpp
+    TaskSystem.hpp
 )
 
 add_executable(${PROJECT_NAME} "${SOURCES};${HEADERS}")

@@ -1,4 +1,4 @@
-#include "TaskSystem.h"
+#include "TaskSystem.hpp"
 
 #include <cassert>
 
@@ -13,35 +13,32 @@
 
 namespace TaskSystem {
 
-TaskSystemExecutor* TaskSystemExecutor::self = nullptr;
+TaskSystemExecutor *TaskSystemExecutor::self = nullptr;
 
-TaskSystemExecutor &TaskSystemExecutor::GetInstance() {
-    return *self;
-}
-
+TaskSystemExecutor &TaskSystemExecutor::GetInstance() { return *self; }
 
 bool TaskSystemExecutor::LoadLibrary(const std::string &path) {
 #ifdef USE_WIN
-    HMODULE handle = LoadLibraryA(path.c_str());
+  HMODULE handle = LoadLibraryA(path.c_str());
 #else
-    void *handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
+  void *handle = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
 #endif
-    assert(handle);
-    if (handle) {
-        OnLibraryInitPtr initLib =
+  assert(handle);
+  if (handle) {
+    OnLibraryInitPtr initLib =
 #ifdef USE_WIN
-            (OnLibraryInitPtr)GetProcAddress(handle, "OnLibraryInit");
+        (OnLibraryInitPtr)GetProcAddress(handle, "OnLibraryInit");
 #else
-            (OnLibraryInitPtr)dlsym(handle, "OnLibraryInit");
+        (OnLibraryInitPtr)dlsym(handle, "OnLibraryInit");
 #endif
-        assert(initLib);
-        if (initLib) {
-            initLib(*this);
-            printf("Initialized [%s] executor\n", path.c_str());
-            return true;
-        }
+    assert(initLib);
+    if (initLib) {
+      initLib(*this);
+      printf("Initialized [%s] executor\n", path.c_str());
+      return true;
     }
-    return false;
+  }
+  return false;
 }
 
-};
+}; // namespace TaskSystem
