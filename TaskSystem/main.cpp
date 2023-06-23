@@ -63,17 +63,23 @@ void testPrinter() {
     assert(libLoaded);
 
     std::vector<TaskSystemExecutor::TaskID> tasks;
-    auto start = std::chrono::steady_clock::now();
-    for (int i = 0; i < 100000; i++) {
-        std::unique_ptr<Task> p1 = std::make_unique<PrinterParams>(2, 1);
-        tasks.push_back(ts.ScheduleTask(std::move(p1), 1));
-    }
-    for (const auto &task : tasks) {
-        ts.WaitForTask(task);
-    }
-    auto stop = std::chrono::steady_clock::now();
+    uint64_t sumTime{};
 
-    printf("Duration: %ld\n", (stop - start).count());
+    int32_t testCount = 100;
+    for (int a = 0; a < testCount; a++) {
+        auto start = std::chrono::steady_clock::now();
+        for (int i = 0; i < 1000; i++) {
+            std::unique_ptr<Task> p1 = std::make_unique<PrinterParams>(100, 1);
+            tasks.push_back(ts.ScheduleTask(std::move(p1), rand() % 100));
+        }
+
+        for (const auto &task : tasks) {
+            ts.WaitForTask(task);
+        }
+        auto stop = std::chrono::steady_clock::now();
+        sumTime += (stop - start).count();
+    }
+    printf("Duration: %ld\n", sumTime / testCount);
 }
 
 int main(int argc, char *argv[]) {

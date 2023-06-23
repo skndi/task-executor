@@ -11,7 +11,6 @@
 #include <unordered_map>
 
 #include "Executor.hpp"
-#include "ReadWriteLock.hpp"
 #include "Task.hpp"
 namespace TaskSystem {
 
@@ -27,7 +26,7 @@ using TaskKey = std::pair<int32_t, uint64_t>;
 struct TaskSystemExecutor {
 private:
     TaskSystemExecutor(int threadCount) : m_recheckTask(threadCount) {
-        std::lock_guard<rwlock::ReadWriteLock> lock(m_jobMutex);
+        std::lock_guard<std::mutex> lock(m_jobMutex);
         m_threadCount = threadCount;
         m_exit = false;
 
@@ -38,7 +37,7 @@ private:
     };
 
     void runJob(int32_t threadIndex) {
-        std::shared_lock<rwlock::ReadWriteLock> lock(m_jobMutex);
+        std::unique_lock<std::mutex> lock(m_jobMutex);
 
         do {
             m_waitForJob.wait(lock, [this]() { return m_tasks.size() || m_exit.load(); });
@@ -58,7 +57,7 @@ private:
                 if (status == Executor::ExecStatus::ES_Stop) {
                     // Use different lock to check in unordered map and remove if there, then use job lock to delete
                     // from map, then notify
-                    std::unique_lock<rwlock::ReadWriteLock> writeLock(m_jobMutex);
+                    std::unique_lock<std::mutex> writeLock(m_jobMutex);
                     if (m_tasks.find(key) != m_tasks.end()) {  // Check this in unordered map?
                         m_tasks.erase(key);
                         // Take notification lock
@@ -78,7 +77,7 @@ public:
     TaskSystemExecutor &operator=(const TaskSystemExecutor &) = delete;
 
     ~TaskSystemExecutor() {
-        std::unique_lock<rwlock::ReadWriteLock> lock(m_jobMutex);
+        std::unique_lock<std::mutex> lock(m_jobMutex);
         m_exit = true;
         lock.unlock();
         m_waitForJob.notify_all();
@@ -119,7 +118,7 @@ public:
      */
     TaskID ScheduleTask(std::unique_ptr<Task> task, int priority) {
         {
-            std::unique_lock<rwlock::ReadWriteLock> lock(m_jobMutex);
+            std::unique_lock<std::mutex> lock(m_jobMutex);
             TaskKey key = std::make_pair(priority, m_currentTaskId);
             m_tasks.emplace(key, executors[task->GetExecutorName()](std::move(task)));
         }
@@ -138,7 +137,7 @@ public:
      * @param task the task to wait for
      */
     void WaitForTask(TaskID task) {
-        std::shared_lock<rwlock::ReadWriteLock> lock(m_jobMutex);
+        std::unique_lock<std::mutex> lock(m_jobMutex);
         auto key = std::make_pair(task.priority, task.id);
         m_waitForCompletion.wait(lock, [this, &key]() -> bool { return m_tasks.find(key) == m_tasks.end(); });
         return;
@@ -199,7 +198,7 @@ private:
     std::vector<std::atomic_bool> m_recheckTask;
     int32_t m_threadCount{};
     uint64_t m_currentTaskId{};
-    rwlock::ReadWriteLock m_jobMutex;
+    std::mutex m_jobMutex;
     std::condition_variable_any m_waitForJob;
     std::condition_variable_any m_waitForCompletion;
     std::atomic_bool m_exit{true};
