@@ -8,6 +8,6 @@ set(SOURCES
 
 add_library(${PROJECT_NAME} SHARED ${SOURCES})
 
-target_include_directories(${PROJECT_NAME} PUBLIC ../TaskSystem)
+target_include_directories(${PROJECT_NAME} PUBLIC ../TaskSystem ../rwlock)
 
 install(TARGETS ${PROJECT_NAME} DESTINATION ${PLUGIN_INSTALL_PATH})

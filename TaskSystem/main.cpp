@@ -1,81 +1,85 @@
-#include "TaskSystem.hpp"
-
 #include <cassert>
 #include <chrono>
 #include <optional>
 #include <thread>
 
+#include "TaskSystem.hpp"
+
 using namespace TaskSystem;
 
 struct PrinterParams : Task {
-  int max;
-  int sleep;
+    int max;
+    int sleep;
 
-  PrinterParams(int max, int sleep) : max(max), sleep(sleep) {}
-  virtual std::optional<int> GetIntParam(const std::string &name) const {
-    if (name == "max") {
-      return max;
-    } else if (name == "sleep") {
-      return sleep;
+    PrinterParams(int max, int sleep) : max(max), sleep(sleep) {}
+    virtual std::optional<int> GetIntParam(const std::string &name) const {
+        if (name == "max") {
+            return max;
+        } else if (name == "sleep") {
+            return sleep;
+        }
+        return std::nullopt;
     }
-    return std::nullopt;
-  }
-  virtual std::string GetExecutorName() const { return "printer"; }
+    virtual std::string GetExecutorName() const {
+        return "printer";
+    }
 };
 
 struct RaytracerParams : Task {
-  std::string sceneName;
+    std::string sceneName;
 
-  RaytracerParams(const std::string &sceneName) : sceneName(sceneName) {}
-  virtual std::optional<std::string>
-  GetStringParam(const std::string &name) const {
-    if (name == "sceneName") {
-      return sceneName;
+    RaytracerParams(const std::string &sceneName) : sceneName(sceneName) {}
+    virtual std::optional<std::string> GetStringParam(const std::string &name) const {
+        if (name == "sceneName") {
+            return sceneName;
+        }
+        return std::nullopt;
     }
-    return std::nullopt;
-  }
-  virtual std::string GetExecutorName() const { return "raytracer"; }
+    virtual std::string GetExecutorName() const {
+        return "raytracer";
+    }
 };
 
 void testRenderer() {
-  TaskSystemExecutor &ts = TaskSystemExecutor::GetInstance();
+    TaskSystemExecutor &ts = TaskSystemExecutor::GetInstance();
 
-  const bool libLoaded = ts.LoadLibrary("./libRaytracerExecutor.so");
-  assert(libLoaded);
-  std::unique_ptr<Task> task =
-      std::make_unique<RaytracerParams>("ManySimpleMeshes");
+    const bool libLoaded = ts.LoadLibrary("./libRaytracerExecutor.so");
+    assert(libLoaded);
+    std::unique_ptr<Task> task = std::make_unique<RaytracerParams>("ManySimpleMeshes");
 
-  TaskSystemExecutor::TaskID id = ts.ScheduleTask(std::move(task), 1);
-  ts.WaitForTask(id);
+    TaskSystemExecutor::TaskID id = ts.ScheduleTask(std::move(task), 1);
+    ts.WaitForTask(id);
 }
 
 void testPrinter() {
-  TaskSystemExecutor &ts = TaskSystemExecutor::GetInstance();
+    TaskSystemExecutor &ts = TaskSystemExecutor::GetInstance();
 #if defined(_WIN32) || defined(_WIN64)
-  const bool libLoaded = ts.LoadLibrary("PrinterExecutor.dll");
+    const bool libLoaded = ts.LoadLibrary("PrinterExecutor.dll");
 #elif defined(__APPLE__)
-  const bool libLoaded = ts.LoadLibrary("libPrinterExecutor.dylib");
+    const bool libLoaded = ts.LoadLibrary("libPrinterExecutor.dylib");
 #elif defined(__linux__)
-  const bool libLoaded = ts.LoadLibrary("./libPrinterExecutor.so");
+    const bool libLoaded = ts.LoadLibrary("./libPrinterExecutor.so");
 #endif
-  assert(libLoaded);
+    assert(libLoaded);
 
-  // two instances of the same task
-  std::unique_ptr<Task> p1 = std::make_unique<PrinterParams>(100, 25);
+    std::vector<TaskSystemExecutor::TaskID> tasks;
+    auto start = std::chrono::steady_clock::now();
+    for (int i = 0; i < 100000; i++) {
+        std::unique_ptr<Task> p1 = std::make_unique<PrinterParams>(2, 1);
+        tasks.push_back(ts.ScheduleTask(std::move(p1), 1));
+    }
+    for (const auto &task : tasks) {
+        ts.WaitForTask(task);
+    }
+    auto stop = std::chrono::steady_clock::now();
 
-  // give some time for the first task to execute
-  TaskSystemExecutor::TaskID id1 = ts.ScheduleTask(std::move(p1), 10);
-  std::this_thread::sleep_for(std::chrono::milliseconds(30000));
-
-  ts.OnTaskCompleted(
-      id1, [](TaskSystemExecutor::TaskID id) { printf("Task 1 finished\n"); });
-  ts.WaitForTask(id1);
+    printf("Duration: %ld\n", (stop - start).count());
 }
 
 int main(int argc, char *argv[]) {
-  TaskSystemExecutor::Init(3);
+    TaskSystemExecutor::Init(16);
 
-  testPrinter();
+    testPrinter();
 
-  return 0;
+    return 0;
 }

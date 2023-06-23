@@ -37,6 +37,7 @@ target_compile_definitions(${PROJECT_NAME} PRIVATE
 
 target_include_directories(${PROJECT_NAME} PUBLIC
     ../TaskSystem
+    ../rwlock
     urban-spork/src
 )
 
