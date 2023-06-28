@@ -11,7 +11,6 @@
 #include <unordered_map>
 
 #include "Executor.hpp"
-#include "ReadWriteLock.hpp"
 #include "Task.hpp"
 namespace TaskSystem {
 
@@ -41,10 +40,9 @@ private:
         std::unique_lock<std::mutex> lock(m_jobMutex);
 
         do {
-            // Use read/write locks
-            m_waitForJob.wait(lock, [this]() { return m_tasks.size() || m_exit; });
+            m_waitForJob.wait(lock, [this]() { return m_tasks.size() || m_exit.load(); });
 
-            if (!m_exit) {
+            if (!m_exit.load()) {
                 auto topTask = m_tasks.begin();
                 ExecutorPtr executor = topTask->second;
                 TaskKey key = topTask->first;
@@ -57,15 +55,21 @@ private:
                 }
 
                 if (status == Executor::ExecStatus::ES_Stop) {
-                    std::lock_guard<std::mutex> writeLock(m_jobMutex);
-                    if (m_tasks.find(key) != m_tasks.end()) {
+                    // Use different lock to check in unordered map and remove if there, then use job lock to delete
+                    // from map, then notify
+                    std::unique_lock<std::mutex> writeLock(m_jobMutex);
+                    if (m_tasks.find(key) != m_tasks.end()) {  // Check this in unordered map?
                         m_tasks.erase(key);
+                        // Take notification lock
+                        // delete from map with notifications
+                        // unlock
                         m_waitForCompletion.notify_all();
+                        // Execute the callback while unlocked;
                     }
                 }
                 lock.lock();
             }
-        } while (!m_exit);
+        } while (!m_exit.load());
     }
 
 public:
@@ -195,8 +199,8 @@ private:
     int32_t m_threadCount{};
     uint64_t m_currentTaskId{};
     std::mutex m_jobMutex;
-    std::condition_variable m_waitForJob;
-    std::condition_variable m_waitForCompletion;
+    std::condition_variable_any m_waitForJob;
+    std::condition_variable_any m_waitForCompletion;
     std::atomic_bool m_exit{true};
 };
 

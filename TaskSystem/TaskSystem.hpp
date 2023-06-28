@@ -3,6 +3,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <iostream>
 #include <map>
 #include <mutex>
 #include <queue>
@@ -20,18 +21,17 @@ namespace TaskSystem {
  *
  */
 
-using ExecutorPtr = std::shared_ptr<Executor>;
-using TaskKey = std::pair<int32_t, uint64_t>;
-
 struct TaskSystemExecutor {
-private:
-    TaskSystemExecutor(int threadCount) : m_recheckTask(threadCount) {
-        std::lock_guard<std::mutex> lock(m_jobMutex);
-        m_threadCount = threadCount;
-        m_exit = false;
+    using ExecutorPtr = std::shared_ptr<Executor>;
+    using TaskID = std::pair<uint64_t, int32_t>;
+    using TaskCompletionCallback = std::function<void(TaskID)>;
 
+private:
+    TaskSystemExecutor(int threadCount) : m_threadCount{threadCount}, m_recheckTask(m_threadCount) {
+        std::lock_guard<std::mutex> lock(m_jobMutex);
+
+        std::fill(m_recheckTask.begin(), m_recheckTask.end(), true);
         for (int32_t i = 0; i < m_threadCount; i++) {
-            m_recheckTask[i].store(false);
             m_workerThreads.push_back(std::thread([this, i]() { this->runJob(i); }));
         }
     };
@@ -44,30 +44,31 @@ private:
 
             if (!m_exit.load()) {
                 auto topTask = m_tasks.begin();
-                ExecutorPtr executor = topTask->second;
-                TaskKey key = topTask->first;
+                ExecutorPtr executor = topTask->second.first;
+                TaskID key = topTask->first;
                 m_recheckTask[threadIndex].store(false);
                 lock.unlock();
 
                 Executor::ExecStatus status{Executor::ExecStatus::ES_Continue};
-                while (status != Executor::ExecStatus::ES_Stop && !m_recheckTask[threadIndex].load()) {
+                // This inner loop is to skip rechecking the map on every iteration
+                while (status != Executor::ExecStatus::ES_Stop &&
+                       !m_recheckTask[threadIndex].load(std::memory_order_relaxed)) {
                     status = executor->ExecuteStep(threadIndex, m_threadCount);
                 }
 
-                if (status == Executor::ExecStatus::ES_Stop) {
-                    // Use different lock to check in unordered map and remove if there, then use job lock to delete
-                    // from map, then notify
-                    std::unique_lock<std::mutex> writeLock(m_jobMutex);
-                    if (m_tasks.find(key) != m_tasks.end()) {  // Check this in unordered map?
-                        m_tasks.erase(key);
-                        // Take notification lock
-                        // delete from map with notifications
-                        // unlock
-                        m_waitForCompletion.notify_all();
-                        // Execute the callback while unlocked;
-                    }
-                }
                 lock.lock();
+
+                auto taskIter = m_tasks.find(key);
+                if (status == Executor::ExecStatus::ES_Stop && taskIter != m_tasks.end()) {
+                    TaskCompletionCallback cb = std::move(taskIter->second.second);
+                    m_tasks.erase(taskIter);
+                    lock.unlock();
+                    m_waitForCompletion.notify_all();
+                    if (cb) {
+                        cb(taskIter->first);
+                    }
+                    lock.lock();
+                }
             }
         } while (!m_exit.load());
     }
@@ -79,6 +80,8 @@ public:
     ~TaskSystemExecutor() {
         std::unique_lock<std::mutex> lock(m_jobMutex);
         m_exit = true;
+        // We reuse recheck task here, to save a comparison with m_exit in the inner while loop
+        std::fill(m_recheckTask.begin(), m_recheckTask.end(), true);
         lock.unlock();
         m_waitForJob.notify_all();
 
@@ -102,11 +105,6 @@ public:
         self = new TaskSystemExecutor(threadCount);
     }
 
-    struct TaskID {
-        uint64_t id;
-        int32_t priority;
-    };
-
     /**
      * @brief Schedule a task with specific priority to be executed
      *
@@ -119,15 +117,13 @@ public:
     TaskID ScheduleTask(std::unique_ptr<Task> task, int priority) {
         {
             std::unique_lock<std::mutex> lock(m_jobMutex);
-            TaskKey key = std::make_pair(priority, m_currentTaskId);
-            m_tasks.emplace(key, executors[task->GetExecutorName()](std::move(task)));
+            TaskID key = std::make_pair(m_currentTaskID, priority);
+            m_tasks.emplace(key, std::make_pair(executors[task->GetExecutorName()](std::move(task)), nullptr));
         }
 
-        for (auto &flag : m_recheckTask) {
-            flag.store(true);
-        }
+        std::fill(m_recheckTask.begin(), m_recheckTask.end(), true);
         m_waitForJob.notify_all();
-        return TaskID{m_currentTaskId++, priority};
+        return TaskID{m_currentTaskID++, priority};
     }
 
     /**
@@ -138,8 +134,7 @@ public:
      */
     void WaitForTask(TaskID task) {
         std::unique_lock<std::mutex> lock(m_jobMutex);
-        auto key = std::make_pair(task.priority, task.id);
-        m_waitForCompletion.wait(lock, [this, &key]() -> bool { return m_tasks.find(key) == m_tasks.end(); });
+        m_waitForCompletion.wait(lock, [this, &task]() -> bool { return m_tasks.find(task) == m_tasks.end(); });
         return;
     }
 
@@ -151,8 +146,16 @@ public:
      * @param task the task that was previously scheduled
      * @param callback the callback to be executed
      */
-    void OnTaskCompleted(TaskID task, std::function<void(TaskID)> &&callback) {
-        callback(task);
+    void OnTaskCompleted(TaskID task, TaskCompletionCallback &&callback) {
+        std::unique_lock<std::mutex> lock(m_jobMutex);
+        auto taskIter = m_tasks.find(task);
+        if (taskIter == m_tasks.end()) {
+            lock.unlock();
+            callback(task);
+            return;
+        }
+
+        taskIter->second.second = std::move(callback);
     }
 
     /**
@@ -171,6 +174,7 @@ public:
      * @param constructor constructor returning new instance of the executor
      */
     void Register(const std::string &executorName, ExecutorConstructor constructor) {
+        std::lock_guard<std::mutex> lock(m_jobMutex);
         executors[executorName] = constructor;
     }
 
@@ -178,30 +182,23 @@ private:
     static TaskSystemExecutor *self;
     std::unordered_map<std::string, ExecutorConstructor> executors;
     struct TaskEntryComparator {
-        bool operator()(const TaskKey &lhs, const TaskKey &rhs) const {
-            if (lhs.first > rhs.first) {
-                return true;
-            } else if (lhs.first < rhs.first) {
-                return false;
-            }  // The compare by ID breaks when the uint64_t wraps, but since
-            // that's hardly feasible we should be fine
-            else if (lhs.second < rhs.second) {
-                return true;
-            } else {
-                return false;
-            }
+        bool operator()(const TaskID &lhs, const TaskID &rhs) const {
+            // We sort by priority and use the taskID as a tie-breaker. Latency is lowered by keeping the order of entry
+            // between tasks with the same priority
+            return (lhs.second > rhs.second) || (!(lhs.second < rhs.second) && (lhs.first < rhs.first));
         }
     };
-    std::map<TaskKey, ExecutorPtr, TaskEntryComparator> m_tasks;
-    std::vector<std::thread> m_workerThreads;
-    std::vector<std::thread> m_notificationThreads;
-    std::vector<std::atomic_bool> m_recheckTask;
+    // This will eventually overflow, but it's such a big number it doesn't really matter
+    uint64_t m_currentTaskID{};
     int32_t m_threadCount{};
-    uint64_t m_currentTaskId{};
-    std::mutex m_jobMutex;
-    std::condition_variable_any m_waitForJob;
-    std::condition_variable_any m_waitForCompletion;
-    std::atomic_bool m_exit{true};
-};
+    std::atomic_bool m_exit{false};
+    // Try std::priority_queue + std::unordered_map for checking items
+    std::map<TaskID, std::pair<ExecutorPtr, TaskCompletionCallback>, TaskEntryComparator> m_tasks;
+    std::vector<std::thread> m_workerThreads;
+    std::vector<std::atomic_bool> m_recheckTask;
 
+    std::mutex m_jobMutex;
+    std::condition_variable m_waitForJob;
+    std::condition_variable m_waitForCompletion;
+};
 };  // namespace TaskSystem

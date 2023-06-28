@@ -32,7 +32,7 @@ void ReadWriteLock::lock() {
 
 void ReadWriteLock::unlock() {
     std::unique_lock<std::shared_mutex> lock(m_mutex);
-    m_writer.clear(std::memory_order_acq_rel);
+    m_writer.clear(std::memory_order_relaxed);
     lock.unlock();
     m_waitCv.notify_all();
 }
