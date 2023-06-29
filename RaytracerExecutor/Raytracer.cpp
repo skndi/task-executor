@@ -6,6 +6,7 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <map>
 #include <random>
 #include <thread>
 #include <vector>
@@ -133,7 +134,7 @@ struct Scene {
         idx += threadCount;
 
         if (idx >= width * height) {
-            if (completedThreads.fetch_add(1) == threadCount - 1) {
+            if (completedThreads.load() == threadCount - 1) {
                 const std::string resultImage = name + ".png";
                 const PNGImage &png = image.createPNGData();
                 const int success = stbi_write_png(resultImage.c_str(),
@@ -143,7 +144,10 @@ struct Scene {
                                                    png.data.data(),
                                                    sizeof(PNGImage::Pixel) * width);
                 assert(success == 1);
+                completedThreads.fetch_add(1);
                 return true;
+            } else {
+                completedThreads.fetch_add(1);
             }
         }
         return false;

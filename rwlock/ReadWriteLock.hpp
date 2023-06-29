@@ -16,7 +16,7 @@ public:
 private:
     std::shared_mutex m_mutex;
     std::condition_variable_any m_waitCv;
-    std::atomic<int32_t> m_readerCount;
-    std::atomic_flag m_writer;
+    std::atomic<int32_t> m_readerCount{};
+    std::atomic_flag m_writer{};
 };
 }  // namespace rwlock

@@ -9,7 +9,7 @@
 #include <queue>
 #include <ranges>
 #include <thread>
-#include <unordered_map>
+#include <unordered_set>
 
 #include "Executor.hpp"
 #include "Task.hpp"
@@ -38,34 +38,33 @@ private:
 
     void runJob(int32_t threadIndex) {
         std::unique_lock<std::mutex> lock(m_jobMutex);
+        auto &recheckTask = m_recheckTask[threadIndex];
 
         do {
             m_waitForJob.wait(lock, [this]() { return m_tasks.size() || m_exit.load(); });
 
             if (!m_exit.load()) {
-                auto topTask = m_tasks.begin();
-                ExecutorPtr executor = topTask->second.first;
-                TaskID key = topTask->first;
-                m_recheckTask[threadIndex].store(false);
+                auto task = m_tasks.begin();
+                ExecutorPtr executor = task->second;
+                TaskID key = task->first;
+                recheckTask.store(false, std::memory_order_relaxed);
                 lock.unlock();
 
                 Executor::ExecStatus status{Executor::ExecStatus::ES_Continue};
                 // This inner loop is to skip rechecking the map on every iteration
-                while (status != Executor::ExecStatus::ES_Stop &&
-                       !m_recheckTask[threadIndex].load(std::memory_order_relaxed)) {
+                while (status != Executor::ExecStatus::ES_Stop && !recheckTask.load(std::memory_order_relaxed)) {
                     status = executor->ExecuteStep(threadIndex, m_threadCount);
                 }
 
                 lock.lock();
-
-                auto taskIter = m_tasks.find(key);
-                if (status == Executor::ExecStatus::ES_Stop && taskIter != m_tasks.end()) {
-                    TaskCompletionCallback cb = std::move(taskIter->second.second);
-                    m_tasks.erase(taskIter);
+                if (status == Executor::ExecStatus::ES_Stop && m_uncompletedTasksCallbackList.contains(key.first)) {
+                    m_tasks.erase(key);
+                    TaskCompletionCallback cb = std::move(m_uncompletedTasksCallbackList[key.first]);
+                    m_uncompletedTasksCallbackList.erase(key.first);
                     lock.unlock();
                     m_waitForCompletion.notify_all();
                     if (cb) {
-                        cb(taskIter->first);
+                        cb(key);
                     }
                     lock.lock();
                 }
@@ -105,6 +104,11 @@ public:
         self = new TaskSystemExecutor(threadCount);
     }
 
+    static void Deinit() {
+        delete self;
+        self = nullptr;
+    }
+
     /**
      * @brief Schedule a task with specific priority to be executed
      *
@@ -115,15 +119,19 @@ public:
      * callbacks for tasks
      */
     TaskID ScheduleTask(std::unique_ptr<Task> task, int priority) {
+        uint64_t taskID{};
         {
-            std::unique_lock<std::mutex> lock(m_jobMutex);
-            TaskID key = std::make_pair(m_currentTaskID, priority);
-            m_tasks.emplace(key, std::make_pair(executors[task->GetExecutorName()](std::move(task)), nullptr));
+            std::lock_guard<std::mutex> taskLock(m_jobMutex);
+            taskID = m_currentTaskID;
+            m_currentTaskID++;
+
+            m_uncompletedTasksCallbackList.emplace(taskID, nullptr);
+            m_tasks.emplace(std::make_pair(taskID, priority), executors[task->GetExecutorName()](std::move(task)));
         }
 
         std::fill(m_recheckTask.begin(), m_recheckTask.end(), true);
         m_waitForJob.notify_all();
-        return TaskID{m_currentTaskID++, priority};
+        return TaskID{taskID, priority};
     }
 
     /**
@@ -134,7 +142,8 @@ public:
      */
     void WaitForTask(TaskID task) {
         std::unique_lock<std::mutex> lock(m_jobMutex);
-        m_waitForCompletion.wait(lock, [this, &task]() -> bool { return m_tasks.find(task) == m_tasks.end(); });
+        m_waitForCompletion.wait(
+            lock, [this, &task]() -> bool { return !m_uncompletedTasksCallbackList.contains(task.first); });
         return;
     }
 
@@ -148,14 +157,13 @@ public:
      */
     void OnTaskCompleted(TaskID task, TaskCompletionCallback &&callback) {
         std::unique_lock<std::mutex> lock(m_jobMutex);
-        auto taskIter = m_tasks.find(task);
-        if (taskIter == m_tasks.end()) {
+        if (!m_uncompletedTasksCallbackList.contains(task.first)) {
             lock.unlock();
             callback(task);
             return;
         }
 
-        taskIter->second.second = std::move(callback);
+        m_uncompletedTasksCallbackList[task.first] = std::move(callback);
     }
 
     /**
@@ -193,7 +201,8 @@ private:
     int32_t m_threadCount{};
     std::atomic_bool m_exit{false};
     // Try std::priority_queue + std::unordered_map for checking items
-    std::map<TaskID, std::pair<ExecutorPtr, TaskCompletionCallback>, TaskEntryComparator> m_tasks;
+    std::map<TaskID, ExecutorPtr, TaskEntryComparator> m_tasks;
+    std::unordered_map<uint64_t, TaskCompletionCallback> m_uncompletedTasksCallbackList;
     std::vector<std::thread> m_workerThreads;
     std::vector<std::atomic_bool> m_recheckTask;
 

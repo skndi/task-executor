@@ -69,13 +69,11 @@ void testPrinter() {
     int32_t testCount = 100;
     for (int a = 0; a < testCount; a++) {
         auto start = std::chrono::steady_clock::now();
-        for (int i = 0; i < 1000; i++) {
-            std::unique_ptr<Task> p1 = std::make_unique<PrinterParams>(100, 1);
+        for (int i = 0; i < 10000; i++) {
+            std::unique_ptr<Task> p1 = std::make_unique<PrinterParams>(100, 10);
             auto id = ts.ScheduleTask(std::move(p1), rand() % 100);
             tasks.push_back(id);
-            if (i % 2 == 0) {
-                ts.OnTaskCompleted(id, [i](TaskSystemExecutor::TaskID id) { /* printf("Task %d finished\n", i); */ });
-            }
+            ts.OnTaskCompleted(id, [i](TaskSystemExecutor::TaskID id) { /* printf("Task %d finished\n", i); */ });
         }
 
         for (const auto &task : tasks) {
@@ -87,27 +85,32 @@ void testPrinter() {
 
     printf("Duration: %ld\n", sumTime / testCount);
 
-    /* std::unique_ptr<Task> p1 = std::make_unique<PrinterParams>(10000, 10);
+    /* std::unique_ptr<Task> p1 = std::make_unique<PrinterParams>(100, 10);
     auto id1 = ts.ScheduleTask(std::move(p1), 1);
     tasks.push_back(id1);
-    ts.OnTaskCompleted(id1, [](TaskSystemExecutor::TaskID id) { printf("Task 1 finished\n"); });
+    ts.OnTaskCompleted(id1, [](TaskSystemExecutor::TaskID id) { printf("Printer 1 finished\n"); });
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
     std::unique_ptr<Task> task = std::make_unique<RaytracerParams>("HeavyMesh");
     TaskSystemExecutor::TaskID id2 = ts.ScheduleTask(std::move(task), 3);
-    ts.OnTaskCompleted(id2, [](TaskSystemExecutor::TaskID id2) { printf("Render finished\n"); });
+    ts.OnTaskCompleted(id2, [](TaskSystemExecutor::TaskID id2) { printf("Render 1 finished\n"); });
     tasks.push_back(id2);
 
-    std::unique_ptr<Task> p2 = std::make_unique<PrinterParams>(100, 100);
+    std::unique_ptr<Task> p2 = std::make_unique<PrinterParams>(10000, 10);
     auto id3 = ts.ScheduleTask(std::move(p2), 2);
-    ts.OnTaskCompleted(id3, [](TaskSystemExecutor::TaskID id) { printf("Task 2 finished\n"); });
+    ts.OnTaskCompleted(id3, [](TaskSystemExecutor::TaskID id) { printf("Printer 2 finished\n"); });
     tasks.push_back(id3);
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    std::unique_ptr<Task> task2 = std::make_unique<RaytracerParams>("ManyHeavyMeshes");
+    std::unique_ptr<Task> task2 = std::make_unique<RaytracerParams>("ManySimpleMeshes");
     TaskSystemExecutor::TaskID id4 = ts.ScheduleTask(std::move(task2), 4);
-    ts.OnTaskCompleted(id4, [](TaskSystemExecutor::TaskID id4) { printf("Render finished\n"); });
+    ts.OnTaskCompleted(id4, [](TaskSystemExecutor::TaskID id4) { printf("Render 2 finished\n"); });
     tasks.push_back(id4);
+
+    std::unique_ptr<Task> p3 = std::make_unique<PrinterParams>(10000, 100);
+    auto id5 = ts.ScheduleTask(std::move(p3), 10);
+    ts.OnTaskCompleted(id5, [](TaskSystemExecutor::TaskID id) { printf("Printer 3 finished\n"); });
+    tasks.push_back(id5);
 
     for (const auto &task : tasks) {
         ts.WaitForTask(task);
@@ -115,8 +118,11 @@ void testPrinter() {
 }
 
 int main(int argc, char *argv[]) {
-    TaskSystemExecutor::Init(64);
+    TaskSystemExecutor::Init(16);
 
     testPrinter();
+
+    TaskSystemExecutor::Deinit();
+
     return 0;
 }
