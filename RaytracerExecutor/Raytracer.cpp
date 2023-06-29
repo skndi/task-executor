@@ -96,7 +96,7 @@ struct Scene {
     }
 
     bool renderStep(int threadIndex, int threadCount) {
-        if (perThreadProgress.empty()) {
+        {
             std::lock_guard<std::mutex> lock(initMutex);
             if (perThreadProgress.empty()) {
                 perThreadProgress.resize(threadCount, 0);

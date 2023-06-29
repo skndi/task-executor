@@ -30,7 +30,6 @@ private:
     TaskSystemExecutor(int threadCount) : m_threadCount{threadCount}, m_recheckTask(m_threadCount) {
         std::lock_guard<std::mutex> lock(m_jobMutex);
 
-        std::fill(m_recheckTask.begin(), m_recheckTask.end(), true);
         for (int32_t i = 0; i < m_threadCount; i++) {
             m_workerThreads.push_back(std::thread([this, i]() { this->runJob(i); }));
         }
@@ -80,7 +79,9 @@ public:
         std::unique_lock<std::mutex> lock(m_jobMutex);
         m_exit = true;
         // We reuse recheck task here, to save a comparison with m_exit in the inner while loop
-        std::fill(m_recheckTask.begin(), m_recheckTask.end(), true);
+        for (auto &recheckFlag : m_recheckTask) {
+            recheckFlag.store(true, std::memory_order_relaxed);
+        }
         lock.unlock();
         m_waitForJob.notify_all();
 
@@ -128,8 +129,9 @@ public:
             m_uncompletedTasksCallbackList.emplace(taskID, nullptr);
             m_tasks.emplace(std::make_pair(taskID, priority), executors[task->GetExecutorName()](std::move(task)));
         }
-
-        std::fill(m_recheckTask.begin(), m_recheckTask.end(), true);
+        for (auto &recheckFlag : m_recheckTask) {
+            recheckFlag.store(true, std::memory_order_relaxed);
+        }
         m_waitForJob.notify_all();
         return TaskID{taskID, priority};
     }

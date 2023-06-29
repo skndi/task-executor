@@ -69,11 +69,17 @@ void testPrinter() {
     int32_t testCount = 100;
     for (int a = 0; a < testCount; a++) {
         auto start = std::chrono::steady_clock::now();
-        for (int i = 0; i < 10000; i++) {
+        for (int i = 0; i < 100; i++) {
             std::unique_ptr<Task> p1 = std::make_unique<PrinterParams>(100, 10);
             auto id = ts.ScheduleTask(std::move(p1), rand() % 100);
             tasks.push_back(id);
-            ts.OnTaskCompleted(id, [i](TaskSystemExecutor::TaskID id) { /* printf("Task %d finished\n", i); */ });
+            ts.OnTaskCompleted(id, [i](TaskSystemExecutor::TaskID id) { printf("Task %d finished\n", i); });
+            if (i % 5 == 0) {
+                std::unique_ptr<Task> task = std::make_unique<RaytracerParams>("Example");
+                TaskSystemExecutor::TaskID id2 = ts.ScheduleTask(std::move(task), rand() % 100);
+                tasks.push_back(id2);
+                ts.OnTaskCompleted(id2, [i](TaskSystemExecutor::TaskID id) { printf("Task %d finished\n", i); });
+            }
         }
 
         for (const auto &task : tasks) {
