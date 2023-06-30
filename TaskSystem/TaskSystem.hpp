@@ -23,8 +23,11 @@ namespace TaskSystem {
 
 struct TaskSystemExecutor {
     using ExecutorPtr = std::shared_ptr<Executor>;
-    using TaskID = std::pair<uint64_t, int32_t>;
-    using TaskCompletionCallback = std::function<void(TaskID)>;
+    struct TaskID {
+        uint64_t id;
+        int32_t priority;
+    };
+    using TaskCompletionCallback = std::function<void(const TaskID &)>;
 
 private:
     TaskSystemExecutor(int threadCount) : m_threadCount{threadCount}, m_recheckTask(m_threadCount) {
@@ -40,26 +43,26 @@ private:
         auto &recheckTask = m_recheckTask[threadIndex];
 
         do {
-            m_waitForJob.wait(lock, [this]() { return m_tasks.size() || m_exit.load(); });
+            m_waitForJob.wait(lock, [this]() { return m_tasks.size() || m_exit; });
 
-            if (!m_exit.load()) {
+            if (!m_exit) {
                 auto task = m_tasks.begin();
                 ExecutorPtr executor = task->second;
                 TaskID key = task->first;
                 recheckTask.store(false, std::memory_order_relaxed);
                 lock.unlock();
 
-                Executor::ExecStatus status{Executor::ExecStatus::ES_Continue};
                 // This inner loop is to skip rechecking the map on every iteration
+                Executor::ExecStatus status{Executor::ExecStatus::ES_Continue};
                 while (status != Executor::ExecStatus::ES_Stop && !recheckTask.load(std::memory_order_relaxed)) {
                     status = executor->ExecuteStep(threadIndex, m_threadCount);
                 }
 
                 lock.lock();
-                if (status == Executor::ExecStatus::ES_Stop && m_uncompletedTasksCallbackList.contains(key.first)) {
+                if (status == Executor::ExecStatus::ES_Stop && m_uncompletedTasksCallbackList.contains(key.id)) {
                     m_tasks.erase(key);
-                    TaskCompletionCallback cb = std::move(m_uncompletedTasksCallbackList[key.first]);
-                    m_uncompletedTasksCallbackList.erase(key.first);
+                    TaskCompletionCallback cb = std::move(m_uncompletedTasksCallbackList[key.id]);
+                    m_uncompletedTasksCallbackList.erase(key.id);
                     lock.unlock();
                     m_waitForCompletion.notify_all();
                     if (cb) {
@@ -68,7 +71,7 @@ private:
                     lock.lock();
                 }
             }
-        } while (!m_exit.load());
+        } while (!m_exit);
     }
 
 public:
@@ -120,20 +123,20 @@ public:
      * callbacks for tasks
      */
     TaskID ScheduleTask(std::unique_ptr<Task> task, int priority) {
-        uint64_t taskID{};
+        uint64_t id{};
         {
             std::lock_guard<std::mutex> taskLock(m_jobMutex);
-            taskID = m_currentTaskID;
+            id = m_currentTaskID;
             m_currentTaskID++;
 
-            m_uncompletedTasksCallbackList.emplace(taskID, nullptr);
-            m_tasks.emplace(std::make_pair(taskID, priority), executors[task->GetExecutorName()](std::move(task)));
+            m_uncompletedTasksCallbackList.emplace(id, nullptr);
+            m_tasks.emplace(TaskID{id, priority}, executors[task->GetExecutorName()](std::move(task)));
         }
         for (auto &recheckFlag : m_recheckTask) {
             recheckFlag.store(true, std::memory_order_relaxed);
         }
         m_waitForJob.notify_all();
-        return TaskID{taskID, priority};
+        return TaskID{id, priority};
     }
 
     /**
@@ -144,8 +147,11 @@ public:
      */
     void WaitForTask(TaskID task) {
         std::unique_lock<std::mutex> lock(m_jobMutex);
-        m_waitForCompletion.wait(
-            lock, [this, &task]() -> bool { return !m_uncompletedTasksCallbackList.contains(task.first); });
+        if (task.id >= m_currentTaskID) {
+            return;
+        }
+        m_waitForCompletion.wait(lock,
+                                 [this, &task]() -> bool { return !m_uncompletedTasksCallbackList.contains(task.id); });
         return;
     }
 
@@ -159,13 +165,17 @@ public:
      */
     void OnTaskCompleted(TaskID task, TaskCompletionCallback &&callback) {
         std::unique_lock<std::mutex> lock(m_jobMutex);
-        if (!m_uncompletedTasksCallbackList.contains(task.first)) {
+        if (task.id >= m_currentTaskID) {
+            return;
+        }
+
+        if (!m_uncompletedTasksCallbackList.contains(task.id)) {
             lock.unlock();
             callback(task);
             return;
         }
 
-        m_uncompletedTasksCallbackList[task.first] = std::move(callback);
+        m_uncompletedTasksCallbackList[task.id] = std::move(callback);
     }
 
     /**
@@ -174,6 +184,7 @@ public:
      * @param path the path to the dynamic library
      * @return true when OnLibraryInit is found, false otherwise
      */
+    // This function is not thread safe!!!
     bool LoadLibrary(const std::string &path);
 
     /**
@@ -195,15 +206,16 @@ private:
         bool operator()(const TaskID &lhs, const TaskID &rhs) const {
             // We sort by priority and use the taskID as a tie-breaker. Latency is lowered by keeping the order of entry
             // between tasks with the same priority
-            return (lhs.second > rhs.second) || (!(lhs.second < rhs.second) && (lhs.first < rhs.first));
+            return (lhs.priority > rhs.priority) || (!(lhs.priority < rhs.priority) && (lhs.id < rhs.id));
         }
     };
-    // This will eventually overflow, but it's such a big number it doesn't really matter
+    // This will eventually wrap around and the ordering will break, but if we get a task every nanosecond and we take
+    // no time to process it it will take 584 years, so we should be fine
     uint64_t m_currentTaskID{};
     int32_t m_threadCount{};
-    std::atomic_bool m_exit{false};
-    // Try std::priority_queue + std::unordered_map for checking items
+    bool m_exit{false};
     std::map<TaskID, ExecutorPtr, TaskEntryComparator> m_tasks;
+    // This structure is also used to check if a task exists, since every task is entered with a nullptr callback
     std::unordered_map<uint64_t, TaskCompletionCallback> m_uncompletedTasksCallbackList;
     std::vector<std::thread> m_workerThreads;
     std::vector<std::atomic_bool> m_recheckTask;

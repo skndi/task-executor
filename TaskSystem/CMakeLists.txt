@@ -13,12 +13,10 @@ set(HEADERS
     TaskSystem.hpp
 )
 
-add_executable(TaskSystem.exe "${SOURCES};${HEADERS}")
+set(TASK_SYSTEM_NAME TaskSystem)
 
-target_link_libraries(TaskSystem.exe
-    rwlock
-)
+add_executable(${TASK_SYSTEM_NAME} "${SOURCES};${HEADERS}")
 
-target_compile_definitions(TaskSystem.exe PRIVATE TS_EXECUTOR_PATH="${PLUGIN_INSTALL_PATH}")
+set_property(TARGET ${TASK_SYSTEM_NAME} PROPERTY INSTALL_RPATH "${PLUGIN_INSTALL_PATH}")
 
-install(TARGETS TaskSystem.exe DESTINATION ${PLUGIN_INSTALL_PATH})
+install(TARGETS ${TASK_SYSTEM_NAME} DESTINATION ${PLUGIN_INSTALL_PATH})
